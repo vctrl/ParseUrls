@@ -36,6 +36,14 @@ func main() {
 
 	s := bufio.NewScanner(f)
 
+	tr := &http.Transport{
+		DisableKeepAlives:  true,
+		IdleConnTimeout:    30 * time.Second,
+		DisableCompression: true,
+	}
+
+	client := &http.Client{Timeout: time.Second * 30, Transport: tr}
+
 	for s.Scan() {
 		var urlData UrlData
 		err := json.Unmarshal(s.Bytes(), &urlData)
@@ -45,13 +53,6 @@ func main() {
 		}
 
 		downloadURLs.AddTask(func() {
-			tr := &http.Transport{
-				DisableKeepAlives:  true,
-				IdleConnTimeout:    30 * time.Second,
-				DisableCompression: true,
-			}
-
-			client := &http.Client{Timeout: time.Second * 30, Transport: tr}
 			response, err := client.Get(urlData.URL)
 			if err != nil {
 				fmt.Println(err.Error())
