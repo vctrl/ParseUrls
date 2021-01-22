@@ -103,6 +103,9 @@ func listen(category string, subscriber chan string) {
 	if err != nil {
 
 	}
+
+	defer f.Close()
+
 	for message := range subscriber {
 		// fmt.Printf("%q: %q\n", category, message)
 		sb.WriteString(fmt.Sprintf("%s\n", message))
