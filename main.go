@@ -54,6 +54,10 @@ func main() {
 
 		downloadURLs.AddTask(func() {
 			response, err := client.Get(urlData.URL)
+			if response != nil {
+				defer response.Body.Close()
+			}
+
 			if err != nil {
 				fmt.Println(err.Error())
 				return
@@ -64,8 +68,6 @@ func main() {
 			if err != nil {
 				return
 			}
-
-			defer response.Body.Close()
 
 			var categories []string
 
