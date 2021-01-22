@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-type UrlData struct {
+type URLData struct {
 	URL        string   `json:"url"`
 	Categories []string `json:"categories"`
 }
@@ -31,7 +31,6 @@ func main() {
 		log.Fatalf("error while starting worker pool: %v", err)
 	}
 
-	mu := &sync.Mutex{}
 	dataChByCategory := make(map[string](chan string))
 
 	s := bufio.NewScanner(f)
@@ -44,8 +43,9 @@ func main() {
 
 	client := &http.Client{Timeout: time.Second * 30, Transport: tr}
 
+	mu := &sync.Mutex{}
 	for s.Scan() {
-		var urlData UrlData
+		var urlData URLData
 		err := json.Unmarshal(s.Bytes(), &urlData)
 		if err != nil {
 			fmt.Printf("%v\n", err.Error())
@@ -77,18 +77,9 @@ func main() {
 				categories = urlData.Categories
 			}
 
-			for _, c := range categories {
-				if _, ok := dataChByCategory[c]; !ok {
-					ch := make(chan string)
-					c := c
-
-					saveToFile.AddTask(func() { listen(c, ch) })
-					mu.Lock()
-					dataChByCategory[c] = ch
-					mu.Unlock()
-				}
-
-				dataChByCategory[c] <- pageTitle
+			for _, category := range categories {
+				createChannelIfNotExist(dataChByCategory, category, saveToFile, mu)
+				dataChByCategory[category] <- pageTitle
 			}
 		})
 	}
@@ -157,4 +148,16 @@ func getPageTitle(response *http.Response, url string) (string, error) {
 	}
 
 	return pageContent[titleStartIndex:titleEndIndex], nil
+}
+
+func createChannelIfNotExist(dataChByCategory map[string](chan string), category string, wp *WorkerPool, mu *sync.Mutex) {
+	if _, ok := dataChByCategory[category]; !ok {
+		ch := make(chan string)
+		category := category
+
+		wp.AddTask(func() { listen(category, ch) })
+		mu.Lock()
+		dataChByCategory[category] = ch
+		mu.Unlock()
+	}
 }
