@@ -44,9 +44,7 @@ func main() {
 
 	mu := &sync.Mutex{}
 
-	i := 0
-	for s.Scan() && i < 10 {
-		i++
+	for s.Scan() {
 		var urlData URLData
 		err := json.Unmarshal(s.Bytes(), &urlData)
 		if err != nil {
