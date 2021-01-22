@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -63,7 +64,7 @@ func main() {
 				return
 			}
 
-			pageTitle, err := getPageTitle(response, urlData.URL)
+			pageTitle, err := getPageTitle(response.Body, urlData.URL)
 
 			if err != nil {
 				fmt.Printf("error parsing page:%v", err.Error())
@@ -123,8 +124,8 @@ func listen(category string, subscriber chan []byte) {
 	f.Write(buf.Bytes())
 }
 
-func getPageTitle(response *http.Response, url string) ([]byte, error) {
-	dataInBytes, err := ioutil.ReadAll(response.Body)
+func getPageTitle(reader io.Reader, url string) ([]byte, error) {
+	dataInBytes, err := ioutil.ReadAll(reader)
 	if err != nil {
 		return nil, err
 	}
