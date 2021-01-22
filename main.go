@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -48,7 +47,7 @@ func main() {
 		var urlData URLData
 		err := json.Unmarshal(s.Bytes(), &urlData)
 		if err != nil {
-			fmt.Printf("%v\n", err.Error())
+			fmt.Printf("unmarshal error:%v\n", err.Error())
 			continue
 		}
 
@@ -59,13 +58,14 @@ func main() {
 			}
 
 			if err != nil {
-				fmt.Println(err.Error())
+				fmt.Printf("http error:%v", err.Error())
 				return
 			}
 
 			pageTitle, err := getPageTitle(response, urlData.URL)
 
 			if err != nil {
+				fmt.Printf("error parsing page:%v", err.Error())
 				return
 			}
 
@@ -101,7 +101,8 @@ func listen(category string, subscriber chan string) {
 	i := 0
 	f, err := os.OpenFile(fmt.Sprintf("results/%s.tsv", category), os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
-
+		fmt.Printf("error opening file: %v", err)
+		return
 	}
 
 	defer f.Close()
@@ -131,7 +132,7 @@ func getPageTitle(response *http.Response, url string) (string, error) {
 	titleStartIndex := strings.Index(pageContent, "<title>")
 	if titleStartIndex == -1 {
 		fmt.Println("No title element found")
-		return "", errors.New("No title element found")
+		return "", fmt.Errorf("error parsing url %s: no title element found", url)
 	}
 
 	titleStartIndex += 7
@@ -141,13 +142,14 @@ func getPageTitle(response *http.Response, url string) (string, error) {
 
 	if titleEndIndex == -1 {
 		fmt.Println("No closing tag for title found.")
-		return "", errors.New("no closing tag for title found")
+		return "", fmt.Errorf("error parsing url %s: no closing tag for title found", url)
 	}
 
 	if titleStartIndex >= len(pageContent) ||
 		titleEndIndex >= len(pageContent) ||
 		titleEndIndex < titleStartIndex {
-		return "", fmt.Errorf("error while parsing url %s, %d %d %d", url, titleStartIndex, titleEndIndex, len(pageContent))
+		return "", fmt.Errorf("error parsing url %s, title tag start index %d, title tag end index %d, page length%d",
+			url, titleStartIndex, titleEndIndex, len(pageContent))
 	}
 
 	return pageContent[titleStartIndex:titleEndIndex], nil
