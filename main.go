@@ -152,7 +152,7 @@ func getPageTitle(response *http.Response, url string) (string, error) {
 
 func createChannelIfNotExist(dataChByCategory map[string](chan string), category string, wp *WorkerPool, mu *sync.Mutex) {
 	if _, ok := dataChByCategory[category]; !ok {
-		ch := make(chan string)
+		ch := make(chan string, 100)
 		category := category
 
 		wp.AddTask(func() { listen(category, ch) })
