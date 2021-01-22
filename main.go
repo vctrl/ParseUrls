@@ -2,13 +2,13 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -30,7 +30,7 @@ func main() {
 		log.Fatalf("error while starting worker pool: %v", err)
 	}
 
-	dataChByCategory := make(map[string](chan string))
+	dataChByCategory := make(map[string](chan []byte))
 
 	s := bufio.NewScanner(f)
 
@@ -43,7 +43,10 @@ func main() {
 	client := &http.Client{Timeout: time.Second * 30, Transport: tr}
 
 	mu := &sync.Mutex{}
-	for s.Scan() {
+
+	i := 0
+	for s.Scan() && i < 10 {
+		i++
 		var urlData URLData
 		err := json.Unmarshal(s.Bytes(), &urlData)
 		if err != nil {
@@ -96,8 +99,8 @@ func main() {
 	saveToFile.Stop()
 }
 
-func listen(category string, subscriber chan string) {
-	var sb strings.Builder
+func listen(category string, subscriber chan []byte) {
+	var buf bytes.Buffer
 	i := 0
 	f, err := os.OpenFile(fmt.Sprintf("results/%s.tsv", category), os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
@@ -109,55 +112,57 @@ func listen(category string, subscriber chan string) {
 
 	for message := range subscriber {
 		// fmt.Printf("%q: %q\n", category, message)
-		sb.WriteString(fmt.Sprintf("%s\n", message))
+		buf.Write(message)
+		buf.Write([]byte("\n"))
+
 		i++
 		if i%20 == 0 {
-			f.WriteString(sb.String())
-			sb.Reset()
+			f.Write(buf.Bytes())
+			buf.Reset()
 		}
 	}
 
-	f.WriteString(sb.String())
+	f.Write(buf.Bytes())
 }
 
-func getPageTitle(response *http.Response, url string) (string, error) {
+func getPageTitle(response *http.Response, url string) ([]byte, error) {
 	dataInBytes, err := ioutil.ReadAll(response.Body)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	pageContent := string(dataInBytes)
+	pageContent := dataInBytes
 
 	// Find a substr
-	titleStartIndex := strings.Index(pageContent, "<title>")
+	titleStartIndex := bytes.Index(pageContent, []byte("<title>"))
 	if titleStartIndex == -1 {
 		fmt.Println("No title element found")
-		return "", fmt.Errorf("error parsing url %s: no title element found", url)
+		return nil, fmt.Errorf("error parsing url %s: no title element found", url)
 	}
 
 	titleStartIndex += 7
 
 	// Find the index of the closing tag
-	titleEndIndex := strings.Index(pageContent, "</title>")
+	titleEndIndex := bytes.Index(pageContent, []byte("</title>"))
 
 	if titleEndIndex == -1 {
 		fmt.Println("No closing tag for title found.")
-		return "", fmt.Errorf("error parsing url %s: no closing tag for title found", url)
+		return nil, fmt.Errorf("error parsing url %s: no closing tag for title found", url)
 	}
 
 	if titleStartIndex >= len(pageContent) ||
 		titleEndIndex >= len(pageContent) ||
 		titleEndIndex < titleStartIndex {
-		return "", fmt.Errorf("error parsing url %s, title tag start index %d, title tag end index %d, page length%d",
+		return nil, fmt.Errorf("error parsing url %s, title tag start index %d, title tag end index %d, page length%d",
 			url, titleStartIndex, titleEndIndex, len(pageContent))
 	}
 
 	return pageContent[titleStartIndex:titleEndIndex], nil
 }
 
-func createChannelIfNotExist(dataChByCategory map[string](chan string), category string, wp *WorkerPool, mu *sync.Mutex) {
+func createChannelIfNotExist(dataChByCategory map[string](chan []byte), category string, wp *WorkerPool, mu *sync.Mutex) {
 	if _, ok := dataChByCategory[category]; !ok {
-		ch := make(chan string, 100)
+		ch := make(chan []byte, 100)
 		category := category
 
 		wp.AddTask(func() { listen(category, ch) })
