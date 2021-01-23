@@ -24,12 +24,23 @@ type PageParser struct {
 	url    string
 }
 
-func (p *PageParser) GetPageData() ([]byte, error) {
-	title, err := p.getPageTagValue([]byte("title"))
-	description, err := p.getPageTagValue([]byte("description"))
+type HttpClient interface {
+	Get(url string) (resp *http.Response, err error)
+}
 
+type OpenFileFunc func(name string, flag int, perm os.FileMode) (io.WriteCloser, error)
+
+func (p *PageParser) GetPageData() ([]byte, error) {
+	dataInBytes, err := ioutil.ReadAll(p.reader)
+	title, err := p.getTitle(dataInBytes)
 	if err != nil {
 		return nil, err
+	}
+
+	description, err := p.getDescription(dataInBytes)
+
+	if err != nil {
+		fmt.Println(err)
 	}
 
 	var buf bytes.Buffer
@@ -43,39 +54,54 @@ func (p *PageParser) GetPageData() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (p *PageParser) getPageTagValue(tag []byte) ([]byte, error) {
-	dataInBytes, err := ioutil.ReadAll(p.reader)
-	if err != nil {
-		return nil, err
-	}
+func (p *PageParser) getTitle(pageContent []byte) ([]byte, error) {
+	return p.getPageTagValue(pageContent, []byte("<title>"), []byte("</title"),
+		func(pageContent []byte, tagStartIndex int, closingTag []byte) (tagEndIndex int) {
+			tagEndIndex = bytes.Index(pageContent, closingTag)
+			return
+		})
+}
 
-	pageContent := dataInBytes
+func (p *PageParser) getDescription(pageContent []byte) ([]byte, error) {
+	return p.getPageTagValue(pageContent, []byte("<meta name=\"description\" content=\""), []byte(""),
+		func(pageContent []byte, tagStartIndex int, closingTag []byte) (tagEndIndex int) {
+			tagEndIndex = -1
+			for i, b := range pageContent[tagStartIndex:] {
+				if b == byte('"') {
+					tagEndIndex = tagStartIndex + i
+					break
+				}
+			}
 
+			return
+		})
+}
+
+func (p *PageParser) getPageTagValue(pageContent []byte, openingTag []byte, closingTag []byte,
+	getEndIndex func([]byte, int, []byte) int) ([]byte, error) {
 	// Find a substr
-	titleStartIndex := bytes.Index(pageContent, []byte("<title>"))
-	if titleStartIndex == -1 {
-		fmt.Println("No title element found")
-		return nil, fmt.Errorf("error parsing url %s: no title element found", p.url)
+	tagStartIndex := bytes.Index(pageContent, openingTag)
+	if tagStartIndex == -1 {
+		return nil, fmt.Errorf("error parsing url %s: no %s element found", p.url, openingTag)
 	}
 
-	titleStartIndex += len(tag) + 2
+	tagStartIndex += len(openingTag)
 
 	// Find the index of the closing tag
-	titleEndIndex := bytes.Index(pageContent, []byte("</title>"))
+	tagEndIndex := getEndIndex(pageContent, tagStartIndex, closingTag)
 
-	if titleEndIndex == -1 {
-		fmt.Println("No closing tag for title found.")
-		return nil, fmt.Errorf("error parsing url %s: no closing tag for title found", p.url)
+	if tagEndIndex == -1 {
+		return nil, fmt.Errorf("error parsing url %s: no %s element found", p.url, closingTag)
 	}
 
-	if titleStartIndex >= len(pageContent) ||
-		titleEndIndex >= len(pageContent) ||
-		titleEndIndex < titleStartIndex {
-		return nil, fmt.Errorf("error parsing url %s, title tag start index %d, title tag end index %d, page length%d",
-			p.url, titleStartIndex, titleEndIndex, len(pageContent))
+	if tagStartIndex >= len(pageContent) ||
+		tagEndIndex >= len(pageContent) ||
+		tagEndIndex < tagStartIndex {
+		return nil, fmt.Errorf("error parsing url %s, tag start index %d, tag end index %d, page length%d",
+			p.url, tagStartIndex, tagEndIndex, len(pageContent))
 	}
 
-	return pageContent[titleStartIndex:titleEndIndex], nil
+	return pageContent[tagStartIndex:tagEndIndex], nil
 }
 
 func main() {
@@ -93,8 +119,6 @@ func main() {
 
 	dataChByCategory := make(map[string](chan []byte))
 
-	s := bufio.NewScanner(f)
-
 	tr := &http.Transport{
 		DisableKeepAlives:  true,
 		IdleConnTimeout:    30 * time.Second,
@@ -103,8 +127,21 @@ func main() {
 
 	client := &http.Client{Timeout: time.Second * 30, Transport: tr}
 
-	mu := &sync.Mutex{}
+	openFile := func(name string, flag int, perm os.FileMode) (io.WriteCloser, error) {
+		return os.OpenFile(name, os.O_WRONLY|os.O_CREATE, 0666)
+	}
 
+	parseURLs(f, downloadURLs, saveToFile, dataChByCategory, client, openFile)
+}
+
+func parseURLs(f io.Reader,
+	downloadURLs *WorkerPool,
+	saveToFile *WorkerPool,
+	dataChByCategory map[string](chan []byte),
+	client HttpClient,
+	openFile OpenFileFunc) {
+	mu := &sync.Mutex{}
+	s := bufio.NewScanner(f)
 	for s.Scan() {
 		var urlData URLData
 		err := json.Unmarshal(s.Bytes(), &urlData)
@@ -120,7 +157,7 @@ func main() {
 			}
 
 			if err != nil {
-				fmt.Printf("http error:%v", err.Error())
+				fmt.Printf("http error: %v", err.Error())
 				return
 			}
 
@@ -128,7 +165,7 @@ func main() {
 			pageData, err := pageParser.GetPageData()
 
 			if err != nil {
-				fmt.Printf("error parsing page:%v", err.Error())
+				fmt.Println(err.Error())
 				return
 			}
 
@@ -141,7 +178,13 @@ func main() {
 			}
 
 			for _, category := range categories {
-				createChannelIfNotExist(dataChByCategory, category, saveToFile, mu)
+				f, err := openFile(fmt.Sprintf("results/%s.tsv", category), os.O_WRONLY|os.O_CREATE, 0666)
+				if err != nil {
+					fmt.Printf("error opening file: %v", err)
+					continue
+				}
+
+				createChannelIfNotExist(f, dataChByCategory, category, saveToFile, mu)
 				dataChByCategory[category] <- pageData
 			}
 		})
@@ -159,31 +202,26 @@ func main() {
 	saveToFile.Stop()
 }
 
-func createChannelIfNotExist(dataChByCategory map[string](chan []byte), category string, wp *WorkerPool, mu *sync.Mutex) {
+func createChannelIfNotExist(f io.WriteCloser, dataChByCategory map[string](chan []byte), category string, wp *WorkerPool, mu *sync.Mutex) {
 	if _, ok := dataChByCategory[category]; !ok {
 		ch := make(chan []byte, 100)
 		category := category
 
-		wp.AddTask(func() { listen(category, ch) })
+		wp.AddTask(func() { listen(f, category, ch) })
 		mu.Lock()
 		dataChByCategory[category] = ch
 		mu.Unlock()
 	}
 }
 
-func listen(category string, subscriber chan []byte) {
+func listen(f io.WriteCloser, category string, subscriber chan []byte) {
 	var buf bytes.Buffer
 	i := 0
-	f, err := os.OpenFile(fmt.Sprintf("results/%s.tsv", category), os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		fmt.Printf("error opening file: %v", err)
-		return
-	}
 
 	defer f.Close()
 
 	for message := range subscriber {
-		// fmt.Printf("%q: %q\n", category, message)
+		fmt.Printf("%q: %q\n", category, message)
 		buf.Write(message)
 		buf.Write([]byte("\n"))
 
